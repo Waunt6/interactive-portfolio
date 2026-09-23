@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>万雅欣 Ayla · 小猫侦探</title>
+<link rel="stylesheet" href="css/style.css?v=7">
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="world"></canvas>
+  <div id="layer"></div>
+  <div id="hint" class="hint"></div>
+</div>
+
+<button id="guide" class="guide"><span class="arrow"></span><em></em></button>
+
+<div id="bubble" class="bubble"><span></span></div>
+
+<header id="topbar">
+  <nav id="chapters"></nav>
+</header>
+
+<footer id="hud">
+  <span class="tip" id="tip"></span>
+  <span class="count" id="count"></span>
+</footer>
+
+<div id="loading" class="loading on">
+  <div class="lbox">
+    <div class="ldots" aria-hidden="true">
+      <span class="ld"></span><span class="ld"></span><span class="ld"></span>
+    </div>
+    <p id="loadingTxt">正在加载首屏素材…</p>
+  </div>
+</div>
+
+<canvas id="xBase"></canvas>
+<canvas id="xFx"></canvas>
+<div id="xDesk" class="xdesk">
+  <div class="xfolders" id="xFolders"></div>
+  <button class="xdesk-next" id="xDeskClose" aria-label="继续向前">
+    <span class="arrow">→</span><em>继续向前</em>
+  </button>
+</div>
+<!-- 弹窗放在桌面外面：桌面压在顶栏下面，弹窗要盖在顶栏上面，不能共用一个层叠上下文 -->
+<div class="xdetail" id="xDetail">
+  <div class="xwin">
+    <div class="xwin-bar">
+      <span id="xWinTitle"></span>
+      <i class="xwin-btns"><b>_</b><b>□</b><b id="xDetailClose">✕</b></i>
+    </div>
+    <div class="xwin-body" id="xDetailBody"></div>
+  </div>
+</div>
+
+<div id="bookzoom" class="bookzoom">
+  <div class="bookwrap">
+    <p class="booktip"><i>✳</i> 右边那五张索引贴，点一下翻到别的爱好</p>
+    <div class="book">
+      <img class="spread" id="bookImg" alt="">
+      <div class="tabs" id="bookTabs"></div>
+    </div>
+  </div>
+  <button class="closebtn" id="bookClose">合上这本书 ✕</button>
+</div>
+
+<script src="js/cat.js?v=5"></script>
+<script src="js/content.js"></script>
+<script src="js/app.js?v=10"></script>
+</body>
+</html>

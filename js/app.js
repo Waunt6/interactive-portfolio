@@ -1,0 +1,1263 @@
+/* ============================================================
+   小猫侦探 · 世界 / 相机 / 流程
+   世界是一条连续的路：房间地面 → 绳子 → 绳顶平台 → 台阶 → 电视 → 书
+   相机把小猫钉在画面偏左，动的是环境
+   ============================================================ */
+(() => {
+  const INK = '#141414', CY = '#3ddbcb', GREY = '#cfcfcf', WHITE = '#ffffff';
+
+  /* ---------- 世界坐标 ---------- */
+  const CS = 3, CW = CAT.W * CS, CH = CAT.H * CS;
+
+  /* 绳顶平台。这个数决定绳子有多长 —— 绳子是从 LV 垂到房间地面(0)的。 */
+  const LV = -3080;                     // 绳顶平台（比原来高 300：第三张教育卡挂在绳子上，尽头还要留一段空绳子给「爬上来」那个圈）
+  const SH = 110;
+  const LV2 = LV - SH * 3;              // 台阶顶 = 后面所有场景的地面
+
+  const ROPE_X = 20, ROPE_CAT = ROPE_X - Math.floor(CW / 2) + 4;
+  /* 绳结间距 = 教育卡片的行距，所以它由最高的那张卡决定，不能随便调小。
+     本科那张带「排名 / 课程 / 概述」三块，实测 344 高（430px 宽的卡）——
+     间距 380 留 36 的余量。**给卡片加内容前先量一遍高度**，超过 344 就要连着
+     KNOT_Y / LV / PIX_Y0 一起调整。 */
+  /* 第一枚绳结整体下移：点「往上爬」后，镜头只升到吊灯顶部的链子刚好离开画面的位置，
+     不再把小猫一次带到过高处；后两枚保持 380 的教育卡片行距。 */
+  const KNOT_Y = [-1600, -1980, -2360], KNOT_GAP = 182;  // 停在绳结下面一点，不挡住热点
+  /* 第三段不再直接按平台留 300：改为 522 后，三张教育卡的顶部
+     依次是 -1940 / -2320 / -2700，纵向间距统一为 380。 */
+  const TOP_GAP = 522;
+  /* 点第 i 个绳结 → 小猫爬到 EDU_DEST(i) 停住，第 i 段教育就挂在那儿。
+     卡片顶对齐小猫的头顶（脚在 cat.y，身高 CH），所以文字是「浮在小猫旁边」，
+     不是浮在它爬过的半路上。卡片往下长，所以间距要大于最高的那张（见上）。 */
+  /* 第三段没有第四个绳结，平台就是那个「绳结」—— 同样挂在它下面一个 KNOT_GAP 处。
+     所以三张卡都是「小猫吊在绳子上、卡片浮在它旁边」，没有一张站在地上。 */
+  const EDU_DEST = (i) => (i < 2 ? KNOT_Y[i + 1] + KNOT_GAP : LV + TOP_GAP);
+  /* 最后一张卡看完后，再单独爬完剩下的空绳子上平台。 */
+  const TOP_SPOT = LV + 84;
+  const EDU_TOP = (i) => EDU_DEST(i) - CH - 10;
+
+  const ST_X = 1100, SW = 630;
+  const STEP_TOP = [LV - SH, LV - SH * 2, LV - SH * 3];
+  /* 小猫停在每一级的**外侧**（刚迈上来的那个边沿），不停在台面正中。
+     镜头把小猫钉在画面 26% 处 —— 也就是小猫左边只看得到 .26 × viewW 那么宽
+     （1500 的窗口约 390）。实习卡片是左对齐在这一级的立面上的，
+     小猫要是停在台面正中（离立面 350+），那张卡就有一截被左边框切掉；
+     停在外侧，卡片正好落在小猫右上方，画面也更居中。
+     热点画在同一个位置 —— 它就是「小猫要走到的那个点」。 */
+  const STEP_PAD = 110;
+  const STEP_MARK = (i) => ST_X + SW * i + STEP_PAD;
+  const STEP_STOP = (i) => STEP_MARK(i) - CW / 2;
+
+  const EXPAND_X = 3920;                          // 展开热点的世界 X 坐标
+  const BOOK_X = 5260;
+  /* 地上那本手账本（assets/book.webp，棕色外壳的实拍图）。
+     只给高度，宽度按原图比例算 —— 换图不会变形。小猫高 132，本子比它矮一截。 */
+  const BOOK_H = 106, BOOK_W = Math.round(BOOK_H * (324 / 440));
+  const WORLD_R = BOOK_X + 720;
+
+  const ANCH_X = .26, GROUND_A = .86;   // 小猫钉在画面偏左 / 地面钉在画面偏下
+  /* 爬绳子时镜头的竖向锚点从 GROUND_A 平滑抬到 ROPE_A（小猫在画面里越爬越高）。
+     不能一上绳就切档 —— 那样地面会「往上弹一下」。
+     过渡距离 = CLIMB_R × viewH，这个比例必须大于 (GROUND_A - ROPE_A)，
+     否则过渡期间地面在画面里会往回走；.55 > .46，留了余量。 */
+  const ROPE_A = .40, CLIMB_R = .55;
+  /* 开场文字的理想高度。原来贴在画面很上方，现在压到画面中段（吊灯下方、小猫上方）——
+     字少了，靠顶会显得整块飘着。矮窗口仍然由 fitTop 兜底往下压。 */
+  const INTRO_Y = -470;
+
+  /* ---------- 01 房间的真实素材 ----------
+     全是照片，所以不进像素缓冲，直接画在主画布上（跟电视一样）。
+     宽高按原图比例锁死：只给一个边，另一边算出来，换图不会变形。 */
+  const AR = {                                   // 原图宽 / 高
+    lamp: 879 / 622,                             // chandelier.webp 里灯体那一块
+    mona: 697 / 1000, veil: 778 / 1000, vase: 626 / 760,
+  };
+  const LAMP_SRC = { x: 11, y: 250, w: 879, h: 622 };   // 灯体在 chandelier.webp 里的位置（自带的短链条不要）
+  /* 整组的右边界压在 1356，1440x900 那种笔记本也能把花瓶看全 */
+  const ROOM = {
+    lamp: { cx: 552, y0: -735, y: -735, w: 205 },   // 吊灯：cx 是中心，y0 是理想高度，y 每次 resize 兜底（见 fitTop）
+    art: [                                       // 两幅画竖向中线对齐在 -355
+      { src: 'assets/oil-mona.webp', x: 680, y: -510, h: 310, ar: AR.mona },
+      { src: 'assets/oil-veil.webp', x: 922, y: -484, h: 258, ar: AR.veil },
+    ],
+    vase: { x: 1148, h: 252 },                   // 底在地面上
+  };
+  ROOM.lamp.h = ROOM.lamp.w / AR.lamp;
+  /* 窗口一矮，地面上方能看到的世界就变少（GROUND_A * viewH，常见窗口在 600~1000 之间浮动），
+     顶上的东西会被挤出画面。fitTop 的做法是：正常窗口用设计好的世界坐标，
+     只有当它离画面顶边不足 padPx 时，才把它往下压到刚好留出 padPx。
+     房间里镜头是锁死的，所以按房间的静止机位算一次就行；爬绳子时镜头升上去，
+     这些东西还是老老实实留在世界里往下走。 */
+  const fitTop = (y0, padPx) => Math.max(y0, -GROUND_A * viewH + padPx / SCALE);
+  /* 链条上端贴到悬浮导航的下沿附近；顶部不再留出一整条白色缓冲带。 */
+  const LAMP_PAD = 62, INTRO_PAD = 62;
+  ROOM.art.forEach((a) => { a.w = a.h * a.ar; });
+  ROOM.vase.w = ROOM.vase.h * AR.vase;
+  ROOM.vase.y = -ROOM.vase.h;
+
+
+  const CHAPS = [
+    ['01', '房间'], ['02', '教育'], ['03', '实习'],
+    ['04', '项目'], ['05', '兴趣'],
+  ];
+  const PHASE_CH = { room: 0, rope: 1, stairs: 2, tv: 3, book: 4 };
+
+  /* ---------- 元素 ---------- */
+  const stage = document.getElementById('stage');
+  const cv = document.getElementById('world');
+  const ctx = cv.getContext('2d');
+  const layer = document.getElementById('layer');
+  const hintEl = document.getElementById('hint');
+  const tipEl = document.getElementById('tip');
+  const countEl = document.getElementById('count');
+  const chapEl = document.getElementById('chapters');
+  const guideEl = document.getElementById('guide');
+  const loadEl = document.getElementById('loading');
+  const loadTxt = document.getElementById('loadingTxt');
+  const xBase = document.getElementById('xBase'), xbCtx = xBase.getContext('2d');
+  const xFx   = document.getElementById('xFx'),   xfCtx = xFx.getContext('2d');
+  const xDesk  = document.getElementById('xDesk');
+  const xFolders = document.getElementById('xFolders');
+  const xDetail  = document.getElementById('xDetail');
+  const xDetailBody = document.getElementById('xDetailBody');
+  const xWinTitle = document.getElementById('xWinTitle');
+  const bookzoom = document.getElementById('bookzoom');
+  const bookTabs = document.getElementById('bookTabs');
+
+  /* ---------- 状态 ---------- */
+  let W = 0, H = 0, SCALE = 1, viewW = 0, viewH = 0, DPR = 1;
+  /* 像素缓冲：世界里所有「我画的」东西先画进这张低分辨率画布，
+     再用最近邻放大贴上去 —— 线条自然就是像素的。
+     1 缓冲像素 = 3 世界像素 = 1 个小猫的像素格（CS=3），所以小猫刚好对齐网格。 */
+  const K = 3;
+  let PX = 3, bw = 0, bh = 0;
+  const buf = document.createElement('canvas');
+  const g = buf.getContext('2d', { willReadFrequently: true });
+  let camX = -140, camY = -700, tgtX = -140, tgtY = -700;
+  let camA = GROUND_A;                 // 当前的竖向锚点，见 ROPE_A / CLIMB_R
+  let camXr = -140, camYr = -700;      // 对齐到像素网格后的相机
+  let hover = null, guide = null;
+  let region = { x0: -440, x1: WORLD_R };
+
+  const st = {
+    phase: 'room', started: false, drop: 0, dropping: false,
+    edu: -1, intern: -1, tab: 0, top: false,
+    xSeen: false, xOpen: false, xBusy: false, book: false,
+  };
+  const doneCh = new Set();
+
+  const cat = { x: 240, y: 0, dir: 1, mode: 'idle', t: 0, plan: [], rope: false, up: false, hold: false, blink: 0, blinkAt: 2 };
+
+  /* ============================================================
+     像素绘制层
+     所有线条都直接点像素，1 缓冲像素 = K 世界像素 = 小猫精灵的 1 格，
+     所以世界和小猫共用同一套像素网格。静态部分一次性画进 pix 大图，
+     每帧只是按整数偏移裁一块贴过来 —— 不缩放、不插值，边缘是硬的。
+     ============================================================ */
+  const PIX_X0 = -702, PIX_Y0 = -4110, PIX_X1 = 11700, PIX_Y1 = 123;
+  const pixW = Math.round((PIX_X1 - PIX_X0) / K), pixH = Math.round((PIX_Y1 - PIX_Y0) / K);
+  const pix = document.createElement('canvas');
+  pix.width = pixW; pix.height = pixH;
+  const pctx = pix.getContext('2d');
+
+  let T = null, TOX = 0, TOY = 0;                 // 当前目标 + 原点（缓冲像素）
+  const aim = (c, ox, oy) => { T = c; TOX = ox; TOY = oy; };
+  const bx = (w) => Math.round(w / K) + TOX;
+  const by = (w) => Math.round(w / K) + TOY;
+  const bn = (w) => Math.max(1, Math.round(w / K));
+
+  function ph(x0, x1, y, c = INK) {               // 横线
+    const a = bx(x0), b = bx(x1);
+    T.fillStyle = c; T.fillRect(Math.min(a, b), by(y), Math.abs(b - a) + 1, 1);
+  }
+  function pv(x, y0, y1, c = INK) {               // 竖线
+    const a = by(y0), b = by(y1);
+    T.fillStyle = c; T.fillRect(bx(x), Math.min(a, b), 1, Math.abs(b - a) + 1);
+  }
+  function pl(x0, y0, x1, y1, c = INK) {          // 斜线（Bresenham）
+    let i = bx(x0), j = by(y0);
+    const i1 = bx(x1), j1 = by(y1);
+    const dx = Math.abs(i1 - i), dy = -Math.abs(j1 - j);
+    const sx = i < i1 ? 1 : -1, sy = j < j1 ? 1 : -1;
+    let err = dx + dy;
+    T.fillStyle = c;
+    for (let n = 0; n < 4000; n++) {
+      T.fillRect(i, j, 1, 1);
+      if (i === i1 && j === j1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; i += sx; }
+      if (e2 <= dx) { err += dx; j += sy; }
+    }
+  }
+  const pbox = (x, y, w, h, c = INK) => { ph(x, x + w, y, c); ph(x, x + w, y + h, c); pv(x, y, y + h, c); pv(x + w, y, y + h, c); };
+  const pfill = (x, y, w, h, c) => { T.fillStyle = c; T.fillRect(bx(x), by(y), bn(w), bn(h)); };
+  function pring(cx, cy, r, c = INK) {            // 圆环
+    const R = Math.max(1, Math.round(r / K)), ci = bx(cx), cj = by(cy);
+    let x = R, y = 0, e = 1 - R;
+    T.fillStyle = c;
+    const s = (i, j) => T.fillRect(i, j, 1, 1);
+    while (x >= y) {
+      s(ci + x, cj + y); s(ci + y, cj + x); s(ci - y, cj + x); s(ci - x, cj + y);
+      s(ci - x, cj - y); s(ci - y, cj - x); s(ci + y, cj - x); s(ci + x, cj - y);
+      y++; if (e < 0) e += 2 * y + 1; else { x--; e += 2 * (y - x) + 1; }
+    }
+  }
+  function pdisc(cx, cy, r, c = INK) {
+    const R = Math.max(1, Math.round(r / K)), ci = bx(cx), cj = by(cy);
+    T.fillStyle = c;
+    for (let j = -R; j <= R; j++) { const w = Math.floor(Math.sqrt(R * R - j * j)); T.fillRect(ci - w, cj + j, 2 * w + 1, 1); }
+  }
+
+  /* ============================================================
+     搭世界（一次性画进 pix）
+     ============================================================ */
+  function buildArt() {
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
+    pctx.clearRect(0, 0, pixW, pixH);
+    aim(pctx, -Math.round(PIX_X0 / K), -Math.round(PIX_Y0 / K));
+
+    /* --- 01 房间：地面是直的 --- */
+    ph(-700, 1560, 0);
+
+    /* --- 02/03 绳顶平台 + 台阶：全是直线 --- */
+    ph(ROPE_X - 160, ST_X, LV);
+    pv(ST_X, LV - SH, LV);
+    ph(ST_X, ST_X + SW, LV - SH);
+    pv(ST_X + SW, LV - SH * 2, LV - SH);
+    ph(ST_X + SW, ST_X + SW * 2, LV - SH * 2);
+    pv(ST_X + SW * 2, LV - SH * 3, LV - SH * 2);
+    ph(ST_X + SW * 2, WORLD_R + 300, LV - SH * 3);
+    // 平台左端的断面
+    pl(ROPE_X - 160, LV, ROPE_X - 184, LV + 36, '#c9c9c9');
+    pl(ROPE_X - 118, LV, ROPE_X - 132, LV + 27, '#c9c9c9');
+    // 绳子顶端的挂钩
+    pbox(ROPE_X - 21, LV - 27, 48, 21);
+
+  }
+
+  /* ============================================================
+     每帧的像素小东西（绳子会伸缩、书会被捡走）
+     ============================================================ */
+  function drawRope() {
+    if (st.drop <= 0) return;
+    /* 绳子只向下生长到地面：不用带回弹的 easeBack，避免先钻出地面再缩回来。 */
+    const t = Math.min(1, st.drop);
+    const yEnd = LV + (0 - LV) * (1 - Math.pow(1 - t, 3));
+    pv(ROPE_X, LV, yEnd); pv(ROPE_X + 6, LV, yEnd);
+    for (let y = LV + 15; y < yEnd - 12; y += 24) { pfill(ROPE_X, y, 3, 3, INK); pfill(ROPE_X + 3, y + 12, 3, 3, INK); }
+  }
+
+  /* 热点画在主画布上，不做像素化 */
+  function drawSpots() {
+    const pulse = 1 + Math.sin(cat.t * 3) * .07;
+    for (const s of spots) {
+      if (!s.live()) continue;
+      if (s.shape === 'circle') {
+        const cx = (s.x - camXr) * SCALE, cy = (s.y - camYr) * SCALE, r = s.r * SCALE * pulse;
+        ctx.strokeStyle = CY;
+        if (s.tie != null) {
+          ctx.beginPath(); ctx.moveTo((s.tie - camXr) * SCALE, cy); ctx.lineTo(cx - r - 5, cy);
+          ctx.lineWidth = 1.4; ctx.stroke();
+        }
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.lineWidth = 2.2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx, cy, r + 9 * SCALE, 0, 7);
+        ctx.strokeStyle = 'rgba(61,219,203,.32)'; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx, cy, 3.4 * SCALE, 0, 7); ctx.fillStyle = CY; ctx.fill();
+      } else if (s === hover || s.mark) {
+        const x = (s.x - camXr) * SCALE, y = (s.y - camYr) * SCALE;
+        const w = s.w * SCALE, h = s.h * SCALE, L = 15;
+        ctx.strokeStyle = CY; ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]].forEach(([a, b, sx, sy]) => {
+          ctx.moveTo(a + sx * L, b - sy * 5); ctx.lineTo(a - sx * 5, b - sy * 5); ctx.lineTo(a - sx * 5, b + sy * L);
+        });
+        ctx.stroke();
+      }
+    }
+  }
+
+  /* ============================================================
+     小猫
+     ============================================================ */
+  /* 绳子底下同一个 x 有两层地面，用 cat.up 区分小猫在楼下还是绳顶那层 */
+  function groundAt(x) {
+    if (!cat.up) return 0;   // 楼下：房间地面
+    if (x < ST_X) return LV;
+    if (x < ST_X + SW) return LV - SH;
+    if (x < ST_X + SW * 2) return LV - SH * 2;
+    return LV2;
+  }
+
+  function tick(dt) {
+    cat.t += dt;
+    cat.blinkAt -= dt;
+    if (cat.blinkAt <= 0) { cat.blink = .12; cat.blinkAt = 2.4 + Math.random() * 4; }
+    if (cat.blink > 0) cat.blink -= dt;
+
+    if (st.dropping) {
+      st.drop = Math.min(1, st.drop + dt / 1.15);
+      if (st.drop >= 1) { st.dropping = false; onRopeReady(); }
+    }
+
+    const a = cat.plan[0];
+    if (!a) {
+      cat.mode = 'idle';
+      if (!cat.rope) cat.y = groundAt(cat.x + CW / 2);
+    } else if (a.t === 'walk') {
+      cat.mode = 'walk';
+      const d = a.x - cat.x, s = 500 * dt;
+      if (Math.abs(d) > 1) cat.dir = Math.sign(d);
+      if (Math.abs(d) <= s) { cat.x = a.x; cat.plan.shift(); } else cat.x += Math.sign(d) * s;
+      if (!cat.rope) cat.y = groundAt(cat.x + CW / 2);
+    } else if (a.t === 'climb') {
+      cat.mode = 'climb';
+      const d = a.y - cat.y, s = 460 * dt;
+      if (Math.abs(d) <= s) { cat.y = a.y; cat.plan.shift(); } else cat.y += Math.sign(d) * s;
+    } else if (a.t === 'do') { cat.plan.shift(); a.fn(); }
+  }
+
+  function catImg() {
+    let set;
+    if (cat.mode === 'walk') set = CAT.walk;
+    else if (cat.mode === 'climb' || cat.rope) set = CAT.climb;
+    else set = cat.hold ? (cat.blink > 0 ? CAT.holdBlink : CAT.hold) : (cat.blink > 0 ? CAT.idleBlink : CAT.idle);
+    const i = cat.mode === 'walk' ? Math.floor(cat.t * 9) % 4
+      : cat.mode === 'climb' ? Math.floor(cat.t * 5) % 2
+        : cat.rope ? 0                              // 爬到位就抓着不动，不再来回倒手
+          : (Math.sin(cat.t * 2) > .7 ? 1 : 0);
+    return set[i % set.length];
+  }
+
+  function drawCat() {
+    const img = catImg();
+    const sx = Math.round((cat.x - camXr) * SCALE / PX) * PX;
+    const sy = Math.round((cat.y - CH - camYr) * SCALE / PX) * PX;
+    const w = CAT.W * PX, h = CAT.H * PX;
+    ctx.save();
+    if (cat.dir < 0) { ctx.translate(sx + w, sy); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w, h); }
+    else ctx.drawImage(img, sx, sy, w, h);
+    ctx.restore();
+  }
+
+
+  /* ============================================================
+     热点
+     ============================================================ */
+  const spots = [];
+  function buildSpots() {
+    spots.length = 0;
+    const add = (o) => { o.live = o.live || (() => true); spots.push(o); };
+
+
+    // 绳结：只有小猫正停在它那一档时亮
+    KNOT_Y.forEach((y, i) => add({
+      id: 'kn' + i, shape: 'circle', x: ROPE_X + 3, y, r: 18, label: '往上爬一段',
+      live: () => st.phase === 'rope' && st.edu === i,
+      act: () => knot(i),
+    }));
+
+    // 绳子尽头：第三段看完之后才亮，点了才真的爬上平台
+    add({
+      id: 'top', shape: 'circle', x: ROPE_X + 3, y: TOP_SPOT, r: 18, label: '爬上来',
+      live: () => st.phase === 'rope' && st.top,
+      act: climbTop,
+    });
+
+    // 台阶
+    STEP_TOP.forEach((top, i) => add({
+      id: 'sp' + i, shape: 'circle', x: STEP_MARK(i), y: top - 44, r: 17, label: '上一级',
+      live: () => st.phase === 'stairs' && st.intern === i,
+      act: () => step(i),
+    }));
+
+    // 展开热点（地面上的光点）
+    add({
+      id: 'xspot', shape: 'circle', x: EXPAND_X, r: 20,
+      /* 光点浮在半空、大约落在画面竖直中线上。地面永远钉在画面 GROUND_A 处，
+         所以从地面往上抬 (GROUND_A - .5) 个 viewH 就是正中 —— 用取值器实时算，
+         换窗口大小它也一直在中线上。 */
+      get y() { return LV2 - (GROUND_A - .5) * viewH; },
+      label: '点一下试试', live: () => st.phase === 'tv' && !st.xOpen,
+      /* 热点本身就是入口：点击后原地展开，不让小猫先走到热点旁边。 */
+      act: startExpand,
+    });
+
+    // 书
+    add({
+      id: 'book', shape: 'rect',
+      x: BOOK_X - BOOK_W / 2 - 12, y: LV2 - BOOK_H - 8, w: BOOK_W + 24, h: BOOK_H + 8, label: '捡起来',
+      live: () => st.phase === 'book', mark: true,
+      act: () => {
+        goTo(BOOK_X - CW - 30, () => {
+          hideBubble(); hideGuide();
+          cat.hold = true;
+          if (!st.book) { st.book = true; done(4); }
+          setTab(st.tab, true);
+        });
+      },
+    });
+
+  }
+
+  function hitTest(wx, wy) {
+    for (let i = spots.length - 1; i >= 0; i--) {
+      const s = spots[i];
+      if (!s.live()) continue;
+      if (s.shape === 'circle') { if (Math.hypot(wx - s.x, wy - s.y) < s.r + 15) return s; }
+      else if (wx > s.x && wx < s.x + s.w && wy > s.y && wy < s.y + s.h) return s;
+    }
+    return null;
+  }
+
+  function clearHoverHint() {
+    hover = null;
+    hintEl.classList.remove('on');
+    stage.classList.remove('hot');
+  }
+
+  /* ============================================================
+     流程
+     ============================================================ */
+  function goTo(x, then) {
+    cat.plan.length = 0;
+    cat.plan.push({ t: 'walk', x });
+    if (then) cat.plan.push({ t: 'do', fn: then });
+  }
+
+  function tip(s) { tipEl.textContent = s; }
+
+  /* dir 四档：
+     rope  箭头贴在**绳子**右侧、小猫头顶上方一截 —— 它指的是那根绳子，
+           不是小猫，所以锚在 ROPE_X 上（小猫这会儿还站在离绳子挺远的地方）
+     up    箭头浮在小猫头顶
+     right 箭头贴在小猫右边（走两步）
+     end   钉在画面最右侧 —— 用在「这一段看完了，往下一幕」，
+           它不属于世界里的某个位置，所以不跟着小猫走 */
+  let guideDir = 'up';
+  function showGuide(dir, label, act) {
+    guide = act; guideDir = dir;
+    guideEl.className = 'guide on ' +
+      (dir === 'end' ? 'right end' : dir === 'rope' ? 'up' : dir);
+    guideEl.querySelector('.arrow').textContent =
+      (dir === 'up' || dir === 'rope') ? '↑' : '→';
+    guideEl.querySelector('em').textContent = label;
+    placeGuide();
+  }
+  function hideGuide() { guide = null; guideEl.className = 'guide'; }
+
+  /* 箭头永远贴在小猫身边，朝它接下来要走的方向；end 那一档除外 */
+  function placeGuide() {
+    if (!guide) return;
+    if (guideDir === 'end') {                    // 视口坐标，和世界无关
+      guideEl.style.left = (W - 96) + 'px';
+      guideEl.style.top = Math.round(H * .5) + 'px';
+      return;
+    }
+    const sx = (cat.x - camXr) * SCALE, sy = (cat.y - camYr) * SCALE;
+    const w = CW * SCALE, h = CH * SCALE;
+    if (guideDir === 'rope') {                   // 贴着绳子，在小猫头顶上方一截
+      guideEl.style.left = ((ROPE_X - camXr) * SCALE + 46) + 'px';
+      guideEl.style.top = Math.max(110, sy - h - 130 * SCALE) + 'px';
+      return;
+    }
+    if (guideDir === 'up') {
+      guideEl.style.left = (sx + w / 2) + 'px';
+      guideEl.style.top = Math.max(96, sy - h - 52) + 'px';
+    } else {
+      guideEl.style.left = (sx + w + 62) + 'px';
+      guideEl.style.top = (sy - h / 2) + 'px';
+    }
+  }
+
+  /* ---------- 小猫头上的气泡 ---------- */
+  /* 和箭头一样是视口层的 DOM，每帧跟着小猫的屏幕坐标走。
+     只在「该动手了」的地方出现（电视 / 手账本），不用来讲内容。 */
+  const bubbleEl = document.getElementById('bubble');
+  let bubbleOn = false;
+  function showBubble(text) {
+    bubbleEl.querySelector('span').textContent = text;
+    bubbleOn = true; placeBubble();
+    bubbleEl.classList.add('on');
+  }
+  function hideBubble() { bubbleOn = false; bubbleEl.classList.remove('on'); }
+  function placeBubble() {
+    if (!bubbleOn) return;
+    const sx = (cat.x - camXr) * SCALE, sy = (cat.y - camYr) * SCALE;
+    bubbleEl.style.left = (sx + CW * SCALE / 2) + 'px';
+    bubbleEl.style.top = Math.max(112, sy - CH * SCALE - 14) + 'px';
+  }
+  guideEl.onclick = () => { const g = guide; hideGuide(); if (g) g();  };
+
+  const show = (id) => { const n = document.getElementById(id); if (n) n.classList.add('on'); };
+  const hide = (id) => { const n = document.getElementById(id); if (n) n.classList.remove('on'); };
+
+  function done(i) {
+    doneCh.add(i);
+    paintChapters();
+  }
+
+  /* --- 01 房间：点任意位置，绳子掉下来 --- */
+  function dropRope() {
+    if (st.started) return;
+    st.started = true;
+    hide('intro'); hide('cap0'); hide('cap1');
+    done(0);
+    st.dropping = true;
+    tip('有根绳子掉下来了');
+  }
+  function onRopeReady() {
+    st.phase = 'rope';
+    paintChapters();
+    tip('点箭头，小猫会顺着绳子往上爬');
+    showGuide('rope', '往上爬', () => {
+      cat.plan.length = 0;
+      cat.plan.push({ t: 'walk', x: ROPE_CAT });
+      cat.plan.push({ t: 'do', fn: () => { cat.rope = true; } });
+      cat.plan.push({ t: 'climb', y: KNOT_Y[0] + KNOT_GAP });
+      cat.plan.push({ t: 'do', fn: () => { st.edu = 0; tip('点亮绳结上的圆圈，看看这一段'); } });
+    });
+  }
+
+  /* --- 02 绳子 --- */
+  function knot(i) {
+    st.edu = -1;                       // 爬的过程中先熄灭
+    cat.plan.length = 0;
+    cat.plan.push({ t: 'do', fn: () => show('ed' + i) });
+    cat.plan.push({ t: 'climb', y: EDU_DEST(i) });   // 终点只有 EDU_DEST 一处说了算
+    cat.plan.push({
+      t: 'do', fn: () => {
+        if (i < 2) { st.edu = i + 1; tip('再点下一个绳结'); }
+        else {
+          st.top = true;                 // 绳子尽头那个圈亮起来
+          tip('这一段看完了 —— 点绳子尽头那个圈，爬上平台');
+        }
+      }
+    });
+  }
+
+  /* 爬完最后那截空绳子，踩上平台。踩稳之后「继续向前」才出现 —— 在绳子上时不给。 */
+  function climbTop() {
+    st.top = false;
+    cat.plan.length = 0;
+    cat.plan.push({ t: 'climb', y: LV });
+    cat.plan.push({
+      t: 'do', fn: () => {
+        cat.rope = false;              // 踩上平台就松手
+        cat.up = true;
+        done(1);
+        tip('到顶了 —— 右边是一层平台');
+        showGuide('end', '继续向前', toStairs);
+      }
+    });
+  }
+
+  function toStairs() {
+    ['ed0', 'ed1', 'ed2'].forEach(hide);
+    st.phase = 'stairs'; paintChapters();
+    goTo(ST_X - 300, () => { st.intern = 0; tip('点台阶上的圆圈，一级一级上去'); });
+  }
+
+  /* --- 03 台阶 --- */
+  function step(i) {
+    st.intern = -1;
+    goTo(STEP_STOP(i), () => {
+      show('in' + i);
+      if (i < 2) { st.intern = i + 1; tip('继续往上'); }
+      else {
+        done(2);
+        tip('三段实习看完了');
+        showGuide('end', '继续向前', toTV);
+      }
+    });
+  }
+
+  function toTV() {
+    ['in0', 'in1', 'in2'].forEach(hide);
+    st.phase = 'tv'; paintChapters();
+    goTo(EXPAND_X - 420, () => {
+      tip('前面半空有个光点 —— 点一下试试');
+      showBubble('这是什么，我们来点一下吧！');
+    });
+  }
+
+  function toBook() {
+    st.phase = 'book'; paintChapters();
+    goTo(BOOK_X - 520, () => {
+      tip('前面地上有本书，走过去捡起来');
+      showBubble('咦？这里有个笔记本，捡起来看看里边有什么吧～');
+      /* 合上手账本后结束这次探索。 */
+    });
+  }
+
+  /* ============================================================
+     覆盖层
+     ============================================================ */
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+  /* 手账页是大图：先在内存里下载并解码，确认可画后再揭开 loading。 */
+  const overlayAssets = new Map();
+  function ensureOverlayAsset(src) {
+    if (overlayAssets.has(src)) return overlayAssets.get(src);
+    const promise = new Promise((resolve, reject) => {
+      const im = new Image();
+      im.addEventListener('load', () => {
+        const decoded = im.decode ? im.decode().catch(() => {}) : Promise.resolve();
+        decoded.then(() => resolve(im));
+      }, { once: true });
+      im.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
+      im.src = src;
+    });
+    overlayAssets.set(src, promise);
+    return promise;
+  }
+  function showAssetLoading() {
+    loadTxt.textContent = '正在加载中';
+    loadEl.classList.add('on');
+  }
+  function hideAssetLoading() { loadEl.classList.remove('on'); }
+  function failAssetLoading() { loadTxt.textContent = '素材加载失败，请刷新页面重试'; }
+
+  /* 手账本：首先等当前页完整加载，然后在后台预热剩下四页。 */
+  const bookImg = document.getElementById('bookImg');
+  let bookWarm = false;
+  async function setTab(i, openAfter = false) {
+    st.tab = i;
+    const h = C.hobbies[i];
+    showAssetLoading();
+    try {
+      await ensureOverlayAsset(h.img);
+      bookImg.src = h.img;
+      bookImg.alt = h.alt;
+      [...bookTabs.children].forEach((b, k) => b.classList.toggle('on', k === i));
+      if (openAfter) bookzoom.classList.add('on');
+      hideAssetLoading();
+      if (!bookWarm) {
+        bookWarm = true;
+        C.hobbies.forEach((o) => { if (o.img !== h.img) ensureOverlayAsset(o.img).catch(() => {}); });
+      }
+      return true;
+    } catch (_) {
+      cat.hold = false;
+      failAssetLoading();
+      return false;
+    }
+  }
+
+  /* 首屏只用得上房间那几样（吊灯 / 两幅油画 / 百合）。后面几幕的素材先只造壳，
+     src 排进 defer，等第一帧画完再后台预取 —— 不跟首屏抢带宽，
+     等真走到那一幕时通常已经下好了。 */
+  const defer = [];
+  const loadLater = (u) => { const i = new Image(); defer.push(() => { i.src = u; }); return i; };
+
+  /* ---------- 展开效果：粒子碎片 → 全屏 Bliss → 文件夹 ---------- */
+  const blissImg = loadLater('assets/bliss.webp');
+  /* 闪亮块只用高饱和的青蓝色：既呼应全站的青色高音，也不会在白底和蓝天上叠成灰。 */
+  const XPALETTE = ['#21dff3','#08bff5','#009bea','#0878e8','#2460df','#3f51d7'];
+  const XCFG = { size:10, spread:760, burn:180, density:3, noise:30 };
+  let xGrid = null, xRaf = 0;
+
+  /* 展开层只铺到地面线为止 —— 地面(LV2)在屏幕上的 Y 就是它的高度。
+     底图画布和文件夹桌面共用这个高度（CSS 变量 --xh），所以小猫和地面
+     照常露在外面，看上去只是背景换了。 */
+  function xSyncRegion() {
+    const h = Math.max(120, Math.round((LV2 - camYr) * SCALE));
+    document.documentElement.style.setProperty('--xh', h + 'px');
+    return h;
+  }
+
+  function xBuildGrid(ox, oy) {
+    const cW = innerWidth, cH = xSyncRegion();
+    if (!cW || !cH) { xGrid = { n:0 }; return; }
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    for (const c of [xBase, xFx]) {
+      c.width = Math.round(cW * dpr); c.height = Math.round(cH * dpr);
+      c.style.width = cW + 'px'; c.style.height = cH + 'px';
+    }
+    xfCtx.imageSmoothingEnabled = false;
+    const S = Math.max(2, Math.round(XCFG.size * dpr));
+    const D = S + 1;
+    const cols = Math.ceil(xBase.width / S), rows = Math.ceil(xBase.height / S);
+    const n = cols * rows;
+    const off = document.createElement('canvas');
+    off.width = xBase.width; off.height = xBase.height;
+    const octx = off.getContext('2d');
+    octx.imageSmoothingQuality = 'high';
+    const sc = Math.max(xBase.width / blissImg.naturalWidth, xBase.height / blissImg.naturalHeight);
+    const dw = blissImg.naturalWidth * sc, dh = blissImg.naturalHeight * sc;
+    octx.drawImage(blissImg, (xBase.width - dw) / 2, (xBase.height - dh) / 2, dw, dh);
+    const cx = ox * dpr, cy = oy * dpr;
+    const maxD = Math.max(Math.hypot(cx, cy), Math.hypot(xBase.width - cx, cy),
+                          Math.hypot(cx, xBase.height - cy), Math.hypot(xBase.width - cx, xBase.height - cy));
+    const noise = xMakeNoise();
+    const freq = 3.2 / Math.max(cols, rows), amp = XCFG.noise / 100;
+    const tOn = new Float32Array(n);
+    let tMax = 0;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const d = Math.hypot(c * S + S/2 - cx, r * S + S/2 - cy) / maxD;
+      const nz = noise(c * freq, r * freq) * .68 + noise(c * freq * 2.7, r * freq * 2.7) * .32;
+      const dd = Math.max(0, d + (nz - .5) * 2 * amp);
+      const v = dd * XCFG.spread + Math.random() * Math.random() * XCFG.burn * .9;
+      tOn[r * cols + c] = v;
+      if (v > tMax) tMax = v;
+    }
+    const order = new Uint32Array(n);
+    for (let i = 0; i < n; i++) order[i] = i;
+    Array.prototype.sort.call(order, (a, b) => tOn[a] - tOn[b]);
+    const orderRev = Uint32Array.from(order).reverse();
+    xGrid = { n, cols, rows, S, D, tOn, tMax, order, orderRev, off };
+  }
+
+  function xMakeNoise() {
+    const N = 1024, p = new Float32Array(N);
+    for (let i = 0; i < N; i++) p[i] = Math.random();
+    const at = (x, y) => p[(((x * 73856093) ^ (y * 19349663)) >>> 0) % N];
+    const sm = t => t * t * (3 - 2 * t);
+    return (x, y) => {
+      const x0 = Math.floor(x), y0 = Math.floor(y);
+      const fx = sm(x - x0), fy = sm(y - y0);
+      const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+      return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+    };
+  }
+
+  function xShards(i, p) {
+    const gx = xGrid, S = gx.S;
+    const x = (i % gx.cols) * S, y = ((i / gx.cols) | 0) * S;
+    const life = p < .22 ? p / .22 : 1 - (p - .22) / .78;
+    const alpha = Math.max(0, life) * (.72 + Math.random() * .28);
+    if (alpha <= .02) return;
+    /* 活跃网格先铺一层明确的蓝色，透明度再低也不会混成中性灰。 */
+    xfCtx.fillStyle = '#168be8';
+    xfCtx.globalAlpha = Math.max(.08, life * .28);
+    xfCtx.fillRect(x, y, S, S);
+    const n = XCFG.density + (Math.random() < .3 ? 1 : 0);
+    for (let s = 0; s < n; s++) {
+      const sz = Math.max(1, (S * (.12 + Math.random() * Math.random() * 1.05)) | 0);
+      const ox = (x + (Math.random() - .5) * S * 1.7) | 0;
+      const oy = (y + (Math.random() - .5) * S * 1.7) | 0;
+      xfCtx.fillStyle = XPALETTE[(Math.random() * XPALETTE.length) | 0];
+      xfCtx.globalAlpha = alpha * (.68 + Math.random() * .32);
+      xfCtx.fillRect(ox, oy, sz, sz);
+      if (Math.random() < .3) {
+        xfCtx.fillStyle = Math.random() < .5 ? '#55fff0' : '#00a8ff';
+        xfCtx.globalAlpha = alpha * .78;
+        xfCtx.fillRect(ox + (Math.random() < .5 ? -2 : 2), oy + (Math.random() < .5 ? -1 : 1), sz, sz);
+      }
+    }
+    if (Math.random() < .15) {
+      xfCtx.fillStyle = '#8cfff4';
+      xfCtx.globalAlpha = alpha * .9;
+      const d = Math.max(1, (S * .18) | 0);
+      xfCtx.fillRect((x + Math.random() * S) | 0, (y + Math.random() * S) | 0, d, d);
+    }
+  }
+
+  function xRun(dir) {
+    cancelAnimationFrame(xRaf);
+    const gx = xGrid;
+    if (!gx || !gx.n) { xFinish(dir); return; }
+    const seq = dir > 0 ? gx.order : gx.orderRev;
+    const burn = XCFG.burn, lead = burn * .6, trail = burn * .4;
+    const timeOf = i => dir > 0 ? gx.tOn[i] : gx.tMax - gx.tOn[i];
+    const total = gx.tMax + trail + 80;
+    let pA = 0, pB = 0, pC = 0, t0 = -1;
+    xRaf = requestAnimationFrame(function tick(now) {
+      if (t0 < 0) t0 = now;
+      const t = now - t0;
+      while (pA < gx.n && timeOf(seq[pA]) - lead <= t) pA++;
+      while (pB < pA && timeOf(seq[pB]) <= t) {
+        const i = seq[pB++], x = (i % gx.cols) * gx.S, y = ((i / gx.cols) | 0) * gx.S;
+        xbCtx.clearRect(x, y, gx.D, gx.D);
+        if (dir > 0) xbCtx.drawImage(gx.off, x, y, gx.D, gx.D, x, y, gx.D, gx.D);
+      }
+      while (pC < pA && timeOf(seq[pC]) + trail <= t) pC++;
+      xfCtx.clearRect(0, 0, xFx.width, xFx.height);
+      if (dir > 0) {
+        /* 边缘的底图碎片提高不透明度并加蓝色罩染，避免白底透上来后显灰。 */
+        xfCtx.globalAlpha = .72;
+        for (let k = pB; k < pA; k++) {
+          const i = seq[k], x = (i % gx.cols) * gx.S, y = ((i / gx.cols) | 0) * gx.S;
+          xfCtx.drawImage(gx.off, x, y, gx.D, gx.D, x, y, gx.D, gx.D);
+        }
+        xfCtx.globalCompositeOperation = 'source-atop';
+        xfCtx.fillStyle = 'rgba(0,126,255,.24)';
+        xfCtx.fillRect(0, 0, xFx.width, xFx.height);
+        xfCtx.globalCompositeOperation = 'source-over';
+        xfCtx.globalAlpha = 1;
+      }
+      /* source-over 保留蓝色本身；lighter 会把半透明蓝色洗成白灰。 */
+      xfCtx.globalCompositeOperation = 'source-over';
+      for (let k = pC; k < pA; k++) {
+        const i = seq[k];
+        xShards(i, (t - (timeOf(i) - lead)) / (lead + trail));
+      }
+      xfCtx.globalCompositeOperation = 'source-over';
+      xfCtx.globalAlpha = 1;
+      if (t < total) { xRaf = requestAnimationFrame(tick); return; }
+      xFinish(dir);
+    });
+  }
+
+  function xFinish(dir) {
+    xfCtx.clearRect(0, 0, xFx.width, xFx.height);
+    if (dir > 0) {
+      xbCtx.clearRect(0, 0, xBase.width, xBase.height);
+      if (xGrid && xGrid.off) xbCtx.drawImage(xGrid.off, 0, 0);
+      xDesk.classList.add('on');
+      tip('点击文件夹查看项目详情');
+    } else {
+      xbCtx.clearRect(0, 0, xBase.width, xBase.height);
+      xBase.classList.remove('on'); xFx.classList.remove('on');
+      xDesk.classList.remove('on'); xDetail.classList.remove('on');
+      st.xOpen = false; st.xBusy = false;
+    }
+    st.xBusy = false;
+  }
+
+  async function startExpand() {
+    if (st.xOpen || st.xBusy) return;
+    showBubble('天啊这是另一个世界！');
+    st.xBusy = true; st.xOpen = true;
+    if (!st.xSeen) { st.xSeen = true; done(3); }
+    if (!blissImg.complete || !blissImg.naturalWidth) await blissImg.decode().catch(() => {});
+    const spot = spots.find(s => s.id === 'xspot');
+    const ox = spot ? (spot.x - camXr) * SCALE : innerWidth / 2;
+    const oy = spot ? (spot.y - camYr) * SCALE : innerHeight / 2;
+    xBuildGrid(ox, oy);
+    if (!xGrid.n) { st.xOpen = false; st.xBusy = false; return; }
+    xBase.classList.add('on'); xFx.classList.add('on');
+    xRun(1);
+  }
+
+  function collapseExpand() {
+    if (!st.xOpen || st.xBusy) return;
+    st.xBusy = true;
+    xDesk.classList.remove('on'); xDetail.classList.remove('on');
+    tip('项目看完了');
+    xRun(-1);
+    /* 不等画面收完 —— 小猫立刻迈步，收起的动画和它一起走 */
+    toBook();
+  }
+
+  /* 文件夹桌面 */
+  xFolders.innerHTML = C.projects.map((p, i) =>
+    `<button data-i="${i}"><img src="assets/folder.png" alt=""><span>${esc(p.short)}</span></button>`).join('');
+  xFolders.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (b) xOpenDetail(+b.dataset.i);
+  });
+  function xOpenDetail(i) {
+    const p = C.projects[i];
+    xWinTitle.textContent = `${p.ch}  —  ${p.title}`;
+    const shot = p.img
+      ? `<figure class="xshot"><img src="${esc(p.img)}" alt="${esc(p.alt || p.title)}" loading="lazy">
+          ${p.cap ? `<figcaption>${esc(p.cap)}</figcaption>` : ''}</figure>` : '';
+    const detailLink = p.pdf
+      ? `<a class="xdownload" href="${esc(p.pdf)}" download="${esc(p.download || '')}">查看详情</a>` : '';
+    xDetailBody.innerHTML = `<div class="xtitle-row"><h3>${esc(p.title)}</h3>${detailLink}</div><div class="xmeta">${esc(p.meta)}</div>
+      ${shot}${p.p.map(t => `<p>${esc(t)}</p>`).join('')}
+      ${p.kpi.length ? `<div class="xkpi">${p.kpi.map(k => `<span>${esc(k)}</span>`).join('')}</div>` : ''}`;
+    xDetailBody.scrollTop = 0;
+    xDetail.classList.add('on');
+  }
+  document.getElementById('xDetailClose').onclick = () => xDetail.classList.remove('on');
+  xDetail.addEventListener('click', (e) => { if (e.target === xDetail) xDetail.classList.remove('on'); });
+  document.getElementById('xDeskClose').onclick = collapseExpand;
+
+  /* ---------- 01 房间：吊灯 / 两幅油画 / 百合 ---------- */
+  const loadImg = (u) => { const i = new Image(); i.src = u; return i; };
+  const lampImg = loadImg('assets/chandelier.webp');
+  const vaseImg = loadImg('assets/lilies.webp');
+  const artImg = ROOM.art.map((a) => loadImg(a.src));
+
+  const ready = (im) => im.complete && im.naturalWidth > 0;
+  /* 世界坐标 → 屏幕，顺手把画面外的东西跳过 */
+  function place(x, y, w, h) {
+    const sx = (x - camXr) * SCALE, sy = (y - camYr) * SCALE;
+    const sw = w * SCALE, sh = h * SCALE;
+    if (sx > W + 40 || sx + sw < -40 || sy > H + 40 || sy + sh < -40) return null;
+    return [sx, sy, sw, sh];
+  }
+
+  /* 吊灯上面那截链条：不接天花板，就短短一段，让灯浮在世界里。
+     链条长度和 ROOM.lamp.y0 是一对：房间最高处 = y0 - CHAIN_LEN，
+     这个值又反过来定绳子要多长（见顶部 LV 那段注释）。灯往上抬多少，
+     链条最好就缩多少，房间顶就不会变 —— 现在 -735-88 = -823，比原来只高 8。 */
+  const CHAIN_LEN = 88;
+  function drawChain(cx, yBottom) {
+    const x = (cx - camXr) * SCALE;
+    if (x < -30 || x > W + 30) return;
+    const y1 = (yBottom - camYr) * SCALE, y0 = y1 - CHAIN_LEN * SCALE;
+    if (y1 < -40 || y0 > H + 40) return;
+    const lw = Math.max(1.2, ROOM.lamp.w * .026 * SCALE);
+    const step = lw * 1.9;
+    ctx.strokeStyle = '#9d7f4c';
+    ctx.lineWidth = Math.max(.9, lw * .3);
+    for (let y = y1, k = 0; y > y0 && k < 60; y -= step, k++) {
+      ctx.beginPath();
+      ctx.ellipse(x, y - step / 2, k % 2 ? lw * .5 : lw * .17, step * .47, 0, 0, 7);
+      ctx.stroke();
+    }
+  }
+
+  const bookImgW = loadLater('assets/book.webp');
+
+  /* 地上那本手账本：真实素材，立在地面上，直接画在主画布，不像素化。
+     关上之后仍然放回原位，让用户可以重复打开。宽高按原图比例锁死。 */
+  function drawGroundBook() {
+    const b = place(BOOK_X - BOOK_W / 2, LV2 - BOOK_H, BOOK_W, BOOK_H);
+    if (b && ready(bookImgW)) ctx.drawImage(bookImgW, b[0], b[1], b[2], b[3]);
+  }
+
+  function drawRoom() {
+    ROOM.art.forEach((a, i) => {
+      const b = place(a.x, a.y, a.w, a.h);
+      if (b && ready(artImg[i])) ctx.drawImage(artImg[i], b[0], b[1], b[2], b[3]);
+    });
+    const v = place(ROOM.vase.x, ROOM.vase.y, ROOM.vase.w, ROOM.vase.h);
+    if (v && ready(vaseImg)) ctx.drawImage(vaseImg, v[0], v[1], v[2], v[3]);
+
+    const L = ROOM.lamp;
+    drawChain(L.cx, L.y);
+    const b = place(L.cx - L.w / 2, L.y, L.w, L.h);
+    if (b && ready(lampImg)) {
+      ctx.drawImage(lampImg, LAMP_SRC.x, LAMP_SRC.y, LAMP_SRC.w, LAMP_SRC.h, b[0], b[1], b[2], b[3]);
+    }
+  }
+
+  function dismissOverlays() {
+    if (st.xOpen) {
+      cancelAnimationFrame(xRaf);
+      xBase.classList.remove('on'); xFx.classList.remove('on');
+      xDesk.classList.remove('on'); xDetail.classList.remove('on');
+      st.xOpen = false; st.xBusy = false;
+    }
+    bookzoom.classList.remove('on');
+  }
+
+  function closeOverlay() {
+    const wasBook = bookzoom.classList.contains('on');
+    dismissOverlays();
+
+    if (wasBook && st.phase === 'book') {
+      cat.hold = false;
+      hideBubble();
+      tip('探索完成，感谢观看');
+      showBubble('这次探索就到这里啦，感谢你看到最后！');
+    }
+  }
+  document.getElementById('bookClose').onclick = closeOverlay;
+  bookzoom.onclick = (e) => { if (e.target === bookzoom) closeOverlay(); };
+
+  bookTabs.innerHTML = C.hobbies.map((h, i) =>
+    `<button data-i="${i}" aria-label="${esc(h.tab)}" title="${esc(h.tab)}"></button>`).join('');
+  bookTabs.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setTab(+b.dataset.i); });
+
+  /* ============================================================
+     世界里的 DOM 文字
+     ============================================================ */
+  function el(html, x, y, id) {
+    const d = document.createElement('div');
+    d.innerHTML = html.trim();
+    const n = d.firstElementChild;
+    n.style.left = x + 'px'; n.style.top = y + 'px';
+    if (id) n.id = id;
+    layer.appendChild(n);
+    return n;
+  }
+
+  /* 卡片顶上那一行：左边机构标识，右边身份小牌。
+     标识默认是褪掉的墨色，等这张卡片亮起来（.tx.on）才慢慢回到品牌色 ——
+     整站只有青色一个高音，品牌色是被允许的第二个，但要小、要晚、要克制。
+     没有 logo 图的用 mark 兜一个墨线字符牌，位置和高度跟 logo 完全一样。 */
+  function orgRow(e) {
+    const left = e.logo
+      ? `<img class="logo" src="${esc(e.logo)}" alt="${esc(e.title)}" draggable="false">`
+      : (e.mark ? `<span class="mark">${esc(e.mark)}</span>` : '');
+    const chips = [e.badge, e.tier].filter(Boolean)
+      .map((t, i) => `<span class="badge${i ? ' tier' : ''}">${esc(t)}</span>`).join('');
+    return `<div class="org">${left}<span class="chips">${chips}</span></div>`;
+  }
+
+  /* 排名 / 课程 / 方向这些「维度」：左边一个窄标签，右边内容，一行一条。
+     标签用等宽字体压成灰的，正文才是主角。 */
+  function infoRows(e) {
+    if (!e.rows || !e.rows.length) return '';
+    return `<dl class="rows">${e.rows.map(([k, v]) =>
+      `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  }
+
+  function buildDOM() {
+    layer.innerHTML = '';
+
+    el(`<div class="tx big">
+      <h1>${esc(C.intro.h)}</h1>
+      ${C.intro.p.map((t) => `<p>${esc(t)}</p>`).join('')}
+      <div class="go"><i>✳</i> ${esc(C.intro.hint)}</div>
+    </div>`, 150, Math.round(fitTop(INTRO_Y, INTRO_PAD)), 'intro');
+
+    ROOM.art.forEach((f, i) => {
+      el(`<div class="cap"><b>${esc(C.frames[i].cap)}</b>${esc(C.frames[i].note)}</div>`,
+        f.x + f.w / 2 - 100, f.y + f.h + 18, 'cap' + i);
+    });
+
+    C.edu.forEach((e, i) => {
+      el(`<div class="tx">
+        ${orgRow(e)}
+        <h3>${esc(e.title)}</h3>
+        <div class="meta">${esc(e.meta)}</div>
+        ${infoRows(e)}
+        ${e.sum ? `<p class="sum">${esc(e.sum)}</p>` : ''}
+      </div>`, ROPE_X + 140, EDU_TOP(i), 'ed' + i);
+    });
+
+    C.intern.forEach((e, i) => {
+      el(`<div class="tx wide">
+        ${orgRow(e)}
+        <h3>${esc(e.title)}</h3>
+        <div class="meta">${esc(e.meta)}</div>
+        ${infoRows(e)}
+        ${e.sum ? `<p class="sum">${esc(e.sum)}</p>` : ''}
+      </div>`, ST_X + SW * i, STEP_TOP[i] - 520, 'in' + i);
+    });
+
+    setTimeout(() => show('intro'), 300);
+  }
+
+  /* ============================================================
+     顶栏 / 底栏
+     ============================================================ */
+  function buildChapters() {
+    chapEl.innerHTML = CHAPS.map(([n, t], i) =>
+      `<button data-i="${i}"><i>${n}</i>${t}</button>`).join('');
+    chapEl.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b) jumpTo(+b.dataset.i);
+    });
+  }
+
+  /* 顶栏点一下就空降过去 —— 五幕本来是一条要一步步走完的路，
+     但看的人未必想重走一遍。每一幕这里都把状态摆成「刚走到这儿」的样子，
+     镜头直接吸附过去，不做位移动画（这个菜单存在的意义就是别再等了）。 */
+  function jumpTo(i) {
+    loadEl.classList.remove('on');
+    dismissOverlays();
+    hideGuide(); hideBubble(); clearHoverHint();
+    cat.plan.length = 0;
+    ['intro', 'cap0', 'cap1', 'ed0', 'ed1', 'ed2', 'in0', 'in1', 'in2'].forEach(hide);
+    st.edu = -1; st.intern = -1; st.top = false;
+    region = { x0: -440, x1: WORLD_R };
+    cat.dir = 1;
+
+    if (i === 0) {                       // 01 房间：回到最开始那一屏
+      st.phase = 'room'; st.started = false; st.dropping = false; st.drop = 0;
+      cat.rope = false; cat.up = false; cat.x = 240; cat.y = 0;
+      show('intro'); tip(C.intro.hint);
+    } else {
+      st.started = true; st.dropping = false; st.drop = 1;
+      if (i === 1) {                     // 02 教育：挂在第一个绳结下面
+        st.phase = 'rope';
+        cat.rope = true; cat.up = false;
+        cat.x = ROPE_CAT; cat.y = KNOT_Y[0] + KNOT_GAP;
+        st.edu = 0; tip('点亮绳结上的圆圈，看看这一段');
+      } else {
+        cat.rope = false; cat.up = true;
+        if (i === 2) {                   // 03 实习：绳顶平台，台阶前
+          st.phase = 'stairs'; cat.x = ST_X - 300; cat.y = LV;
+          st.intern = 0; tip('点台阶上的圆圈，一级一级上去');
+        } else if (i === 3) {            // 04 项目：展开热点前
+          st.phase = 'tv'; cat.x = EXPAND_X - 420; cat.y = LV2;
+          tip('前面半空有个光点 —— 点一下试试');
+          showBubble('这是什么，我们来点一下吧！');
+        } else if (i === 4) {            // 05 兴趣：书前
+          st.phase = 'book'; cat.x = BOOK_X - 520; cat.y = LV2;
+          tip('前面地上有本书，走过去捡起来');
+          showBubble('咦？这里有个笔记本，捡起来看看里边有什么吧～');
+        }
+      }
+    }
+    snapCam();
+    paintChapters();
+  }
+
+  /* 镜头瞬间吸到小猫身上（含爬绳时那套竖向锚点），不走 lerp */
+  function snapCam() {
+    const up = clamp((groundAt(cat.x) - cat.y) / (CLIMB_R * viewH), 0, 1);
+    camA = GROUND_A + (ROPE_A - GROUND_A) * up;
+    const right = Math.max(region.x0, region.x1 - viewW);
+    camX = tgtX = clamp(cat.x + CW / 2 - viewW * ANCH_X, region.x0, right);
+    camY = tgtY = cat.y - viewH * camA;
+    camXr = Math.round(camX / K) * K; camYr = Math.round(camY / K) * K;
+    layer.style.transform = `scale(${SCALE}) translate(${-camXr}px,${-camYr}px)`;
+  }
+  function paintChapters() {
+    const cur = PHASE_CH[st.phase];
+    [...chapEl.children].forEach((n, i) => {
+      n.classList.toggle('on', i === cur);
+      n.classList.toggle('done', doneCh.has(i) && i !== cur);
+    });
+    countEl.textContent = `${String(doneCh.size).padStart(2, '0')} / 05`;
+  }
+
+  /* ============================================================
+     指针
+     ============================================================ */
+  /* 画面不给拖、不给滚、不给方向键 —— 镜头永远跟着小猫。
+     想去别的地方走顶栏的章节菜单，那才是唯一的导航方式。
+     指针事件只剩下「点」和「悬浮找热点」这两件事。 */
+  const toWorld = (e) => {
+    const r = cv.getBoundingClientRect();
+    return [camXr + (e.clientX - r.left) / SCALE, camYr + (e.clientY - r.top) / SCALE];
+  };
+
+  stage.addEventListener('pointermove', (e) => {
+    const [wx, wy] = toWorld(e);
+    const s = hitTest(wx, wy);
+    hover = s;
+    stage.classList.toggle('hot', !!s);
+    if (s) {
+      hintEl.textContent = s.label;
+      hintEl.style.left = e.clientX + 'px'; hintEl.style.top = e.clientY + 'px';
+      hintEl.classList.add('on');
+    } else hintEl.classList.remove('on');
+  });
+
+  stage.addEventListener('click', (e) => {
+    if (e.target !== cv) return;
+    const [wx, wy] = toWorld(e);
+    const s = hitTest(wx, wy);
+    if (s) { s.act(); return; }
+    if (st.phase === 'room') dropRope();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (xDetail.classList.contains('on')) { xDetail.classList.remove('on'); return; }
+      if (st.xOpen) { collapseExpand(); return; }
+      closeOverlay();
+    }
+  });
+
+  /* ============================================================
+     主循环
+     ============================================================ */
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  function advance(dt) {
+    tick(dt);
+    {
+      tgtX = cat.x + CW / 2 - viewW * ANCH_X;
+      const up = clamp((groundAt(cat.x) - cat.y) / (CLIMB_R * viewH), 0, 1);
+      const want = GROUND_A + (ROPE_A - GROUND_A) * up;
+      /* 往上爬（want 变小）直接取值：只要不滞后，地面就只会往下走，不会回弹。
+         爬到顶踩上平台时 want 会一下子跳回 GROUND_A，那一下才做时间缓动，滑过去而不是切过去。 */
+      camA = want < camA ? want : camA + (want - camA) * Math.min(1, dt * 3);
+      tgtY = cat.y - viewH * camA;
+    }
+    const right = Math.max(region.x0, region.x1 - viewW);
+    tgtX = clamp(tgtX, region.x0, right);
+    const k = Math.min(1, dt * 7);
+    camX += (tgtX - camX) * k; camY += (tgtY - camY) * k;
+    camXr = Math.round(camX / K) * K; camYr = Math.round(camY / K) * K;
+    layer.style.transform = `scale(${SCALE}) translate(${-camXr}px,${-camYr}px)`;
+    placeGuide();
+    placeBubble();
+  }
+
+  function render() {
+    // 1) 世界：从 pix 大图里按整数偏移裁一块，1:1 贴进缓冲（不缩放，边缘是硬的）
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, bw, bh);
+    g.imageSmoothingEnabled = false;
+    const sx = Math.round(camXr / K) - Math.round(PIX_X0 / K);
+    const sy = Math.round(camYr / K) - Math.round(PIX_Y0 / K);
+    g.drawImage(pix, sx, sy, bw, bh, 0, 0, bw, bh);
+
+    // 2) 会动的像素小东西
+    aim(g, -Math.round(camXr / K), -Math.round(camYr / K));
+    drawRope();
+
+    // 3) 最近邻放大贴到主画布
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(buf, 0, 0, bw, bh, 0, 0, bw * PX, bh * PX);
+
+    // 4) 真实素材：房间里的吊灯 / 油画 / 百合
+    ctx.imageSmoothingEnabled = true;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    drawRoom();
+    drawGroundBook();
+
+    // 5) 小猫（像素，对齐网格，走在电视前面）
+    ctx.imageSmoothingEnabled = false;
+    drawCat();
+
+    // 6) 热点：不像素化，画在最上层
+    ctx.imageSmoothingEnabled = true;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    drawSpots();
+  }
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(.045, (now - last) / 1000); last = now;
+    advance(dt); render();
+    requestAnimationFrame(loop);
+  }
+
+  /* ============================================================
+     尺寸 / 启动
+     ============================================================ */
+  function resize() {
+    W = innerWidth; H = innerHeight; DPR = Math.min(2, devicePixelRatio || 1);
+    // 让 1 缓冲像素 = 整数个屏幕像素，放大后才不会糊
+    PX = clamp(Math.round(H / 940 * K), 2, 5);
+    SCALE = PX / K;
+    viewW = W / SCALE; viewH = H / SCALE;
+    ROOM.lamp.y = Math.round(fitTop(ROOM.lamp.y0, LAMP_PAD + CHAIN_LEN * SCALE));  // 矮窗口把吊灯往下压，链条也要留出来
+    const it = document.getElementById('intro');               // 开场文字同理，别贴到顶栏上
+    if (it) it.style.top = Math.round(fitTop(INTRO_Y, INTRO_PAD)) + 'px';
+    bw = Math.ceil(W / PX) + 1; bh = Math.ceil(H / PX) + 1;
+    buf.width = bw; buf.height = bh;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    if (st.xOpen) xSyncRegion();
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  buildArt(); buildSpots(); buildDOM(); buildChapters(); paintChapters();
+  camX = tgtX = cat.x + CW / 2 - viewW * ANCH_X;
+  camY = tgtY = -viewH * GROUND_A;
+  camXr = Math.round(camX / K) * K; camYr = Math.round(camY / K) * K;
+  layer.style.transform = `scale(${SCALE}) translate(${-camXr}px,${-camYr}px)`;
+  tip(C.intro.hint);
+  /* 首屏的四类实物素材全部可用后才揭开 loading，避免用户先看到空画框。 */
+  const firstScreenAssets = [lampImg, vaseImg, ...artImg];
+  const waitForImage = (im) => new Promise((resolve, reject) => {
+    if (im.complete) { ready(im) ? resolve() : reject(new Error(`Failed to load ${im.src}`)); return; }
+    im.addEventListener('load', resolve, { once: true });
+    im.addEventListener('error', reject, { once: true });
+  }).then(() => (im.decode ? im.decode().catch(() => {}) : undefined));
+
+  loadTxt.textContent = '正在加载首屏素材…';
+  Promise.all(firstScreenAssets.map(waitForImage)).then(() => {
+    render();
+    requestAnimationFrame((t) => {
+      last = t; loop(t);
+      loadEl.classList.remove('on');
+      /* 首屏已经画出来了，这时候再去取后面几幕的素材 */
+      requestAnimationFrame(() => defer.splice(0).forEach((f) => f()));
+    });
+  }).catch(() => {
+    loadTxt.textContent = '首屏素材加载失败，请刷新页面重试';
+  });
+
+  /* 调试（面板不可见时 rAF 会停）：__d.step(秒) / __d.run('kn0') */
+  window.__d = {
+    cat, st, spots, goTo,
+    run: (id) => { const s = spots.find((q) => q.id === id); if (s) s.act(); },
+    tap: () => guideEl.click(),
+    step(sec = 1) { const h = 1 / 60; for (let i = 0; i < sec / h; i++) advance(h); camX = tgtX; camY = tgtY; camXr = Math.round(camX / K) * K; camYr = Math.round(camY / K) * K; layer.style.transform = `scale(${SCALE}) translate(${-camXr}px,${-camYr}px)`; render(); },
+    cam: () => ({ camX: camXr, camY: camYr, SCALE, viewW, viewH }),
+  };
+})();

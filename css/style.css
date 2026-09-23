@@ -1,0 +1,417 @@
+/* ============================================================
+   万雅欣 · 小猫侦探
+   白纸 / 细墨线 / 像素猫，青色是唯一的高音
+   ============================================================ */
+:root{
+  --ink:#141414;
+  --ink2:#5c5c5c;
+  --mute:#a2a2a2;
+  --line:#e6e6e6;
+  --cyan:#3ddbcb;
+  --deep:#0e9c8e;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:#fdfdfc;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font-family:inherit}
+
+/* ---------- 舞台 ---------- */
+/* 画面不能拖，所以没有 grab / grabbing 那两个手型 */
+#stage{position:fixed;inset:0;overflow:hidden;cursor:default;touch-action:none;z-index:10}
+#stage.hot{cursor:pointer}
+#world{display:block;width:100%;height:100%;image-rendering:pixelated}
+
+#layer{position:absolute;inset:0;transform-origin:0 0;pointer-events:none;will-change:transform}
+/* 世界层只负责显示，点击一律交给下面的 canvas 处理 */
+#layer>*{position:absolute;pointer-events:none}
+
+/* ---------- 世界里的文字块 ---------- */
+.tx{
+  width:620px;                                   /* 概述是整段的，窄了行数爆炸 */
+  opacity:0;transform:translateY(14px);
+  transition:opacity .5s ease,transform .5s cubic-bezier(.2,.8,.2,1);
+}
+.tx.on{opacity:1;transform:none}
+/* 机构那一行：左边标识，右边身份小牌，中间一条细墨线把两头连起来 */
+.tx .org{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:11px;padding-bottom:9px;border-bottom:1px solid var(--line);
+  min-height:26px;                              /* 有没有 logo，行高都一样 */
+}
+.tx .org .chips{margin-left:auto;display:flex;align-items:center;gap:5px;flex:none}
+
+/* logo 用高度对齐，宽度自适应；再用 max-width 收住理想那种特别扁的 */
+.tx .org .logo{
+  height:22px;max-width:170px;object-fit:contain;object-position:left center;
+  filter:grayscale(1) contrast(.9) opacity(.5);
+  transition:filter .6s ease .3s;               /* 比正文慢半拍，最后才上色 */
+  user-select:none;
+}
+/* 一样高不等于一样重：按视觉分量各自微调，让四个标识在卡片上压秤一致。
+   理想是实心黑，同高时比谁都重，压小；华工是细笔画的印章＋书法，给多一点。 */
+.tx .org .logo[src$="lixiang.webp"]{height:17px}
+.tx .org .logo[src$="scut.webp"]{height:27px}
+.tx .org .logo[src$="kuaishou.webp"]{height:20px}
+.tx .org .logo[src$="ustb.webp"]{height:26px}   /* 和华工同构：印章＋书法，笔画细 */
+.tx.on .org .logo{filter:grayscale(0) contrast(1) opacity(1)}
+
+/* 没有 logo 时的兜底：一块墨线字符牌，跟 logo 同高 */
+.tx .org .mark{
+  display:inline-flex;align-items:center;height:22px;padding:0 9px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+  color:var(--ink);border:1px solid var(--ink);border-radius:2px;
+}
+
+.tx .badge{
+  display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  border:1px solid var(--ink);border-radius:999px;padding:3px 10px;
+}
+/* 211 / 985 是补充信息，压成灰的，别跟学历抢 */
+.tx .badge.tier{border-color:var(--mute);color:var(--mute);letter-spacing:.08em}
+.tx h3{margin:0 0 5px;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.4}
+.tx .meta{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--mute);margin-bottom:12px}
+.tx p{margin:0 0 7px;font-size:13.5px;line-height:1.85;color:#3a3a3a}
+.tx p:last-child{margin-bottom:0}
+
+/* 维度行：排名 / 课程 / 方向。左标签固定 34px，右内容自己换行对齐。 */
+.tx .rows{display:grid;grid-template-columns:34px 1fr;gap:5px 12px;margin:0 0 11px}
+.tx .rows dt{
+  font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--mute);
+  line-height:1.85;                             /* 和右边正文同一条基线 */
+}
+.tx .rows dd{margin:0;font-size:12.5px;line-height:1.85;color:#3a3a3a}
+
+/* 概述：整段的，跟上面点状的维度行拉开，用一条极淡的线隔一下 */
+.tx .sum{
+  margin:0;padding-top:11px;border-top:1px solid var(--line);
+  font-size:13px;line-height:1.9;color:#3a3a3a;text-align:justify;
+}
+
+.tx.wide{width:470px}
+.tx.big{width:440px}
+.tx.big h1{margin:0 0 16px;font-size:52px;font-weight:600;letter-spacing:-.02em;line-height:1.05}
+.tx.big p{font-size:15px;line-height:1.95;color:var(--ink2)}
+.tx.big .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--mute);margin-bottom:18px}
+.tx.big .go{margin-top:22px;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;color:var(--deep)}
+.tx.big .go i{display:inline-block;font-style:normal;animation:nudge 1.6s ease-in-out infinite}
+@keyframes nudge{0%,100%{transform:translateX(0)}50%{transform:translateX(5px)}}
+
+/* 画框下的小标签 */
+.cap{
+  font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--mute);
+  text-align:center;width:200px;opacity:0;transition:opacity .4s;
+}
+.cap.on{opacity:1}
+.cap b{display:block;font-family:var(--sans);font-size:12.5px;color:var(--ink);letter-spacing:0;margin-bottom:3px}
+
+/* ---------- 书 ---------- */
+.bookzoom .bookwrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.booktip{
+  margin:0;align-self:flex-end;                 /* 靠右，正对着索引贴 */
+  font-size:12.5px;letter-spacing:.02em;color:var(--ink2);
+}
+.booktip i{font-style:normal;color:var(--cyan);margin-right:6px}
+
+.bookzoom .book{
+  position:relative;
+  /* 三个上限一起夹：宽了不超过 1360，窄屏跟着视口，矮屏用 vh 换算（比例 1344/1127） */
+  width:min(1360px,94vw,104vh);
+  aspect-ratio:1344/1127;                 /* 和 journal-*.webp 的裁切框一致，热区百分比才准 */
+  transform:scale(.95);transition:transform .38s cubic-bezier(.2,.85,.25,1);
+  filter:drop-shadow(0 26px 34px rgba(0,0,0,.22));
+}
+.bookzoom.on .book{transform:none}
+.book .spread{display:block;width:100%;height:100%;object-fit:contain}
+
+/* 右侧五个索引贴：图里画好了，这里只叠一层透明热区。
+   悬浮/选中不画框 —— 用一团没有边界的柔光，免得在纸上压出一个方块。 */
+.book .tabs{position:absolute;inset:0}
+.book .tabs button{
+  position:absolute;left:94.4%;width:5.4%;
+  appearance:none;border:0;padding:0;cursor:pointer;
+  background:radial-gradient(closest-side,rgba(61,219,203,.55),rgba(61,219,203,.2) 55%,transparent 80%);
+  opacity:0;transition:opacity .22s;
+}
+.book .tabs button:nth-child(1){top:9.4%;height:10.5%}    /* 旅游 */
+.book .tabs button:nth-child(2){top:24.9%;height:9.3%}    /* 运动 */
+.book .tabs button:nth-child(3){top:40.1%;height:9.0%}    /* 潮流 */
+.book .tabs button:nth-child(4){top:53.3%;height:9.4%}    /* 游戏 */
+.book .tabs button:nth-child(5){top:66.8%;height:9.7%}    /* 影视 */
+.book .tabs button:hover{opacity:1}
+/* 当前这一页不做任何标记 —— 索引贴本身在图里就有颜色，再压一层青色柔光会脏。
+   哪一页是当前页看内容就知道了，书上方那行字负责告诉你索引贴能点。 */
+.book .tabs button:focus-visible{opacity:1;outline:2px solid var(--ink);outline-offset:2px}
+
+/* 手账本比另外两个覆盖层大得多，关闭键挪到右上角，别挤掉书的高度 */
+.bookzoom .closebtn{top:22px;right:26px;bottom:auto;left:auto;transform:none}
+
+/* ---------- 顶栏 ---------- */
+#topbar{
+  position:fixed;top:0;left:0;right:0;height:64px;z-index:30;
+  display:flex;align-items:center;padding:0 22px;
+  pointer-events:none;                       /* 只有菜单本身接点击，别挡住世界 */
+  background:none;
+}
+/* 悬浮的章节菜单：点一下直接空降到那一幕 */
+#chapters{
+  pointer-events:auto;
+  display:flex;gap:2px;margin:0 auto;padding:5px;   /* 顶栏正中 */
+  background:rgba(255,255,255,.88);
+  backdrop-filter:blur(8px);
+  border:1px solid var(--line);border-radius:999px;
+  box-shadow:0 8px 22px -14px rgba(0,0,0,.4);
+}
+#chapters button{
+  appearance:none;background:none;border:0;cursor:pointer;border-radius:999px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--mute);
+  padding:7px 12px;white-space:nowrap;transition:background .22s,color .22s;
+}
+#chapters button:hover{background:#f1f1ef;color:var(--ink)}
+#chapters button.done{color:var(--ink2)}
+#chapters button.on{background:var(--ink);color:#fff}
+#chapters button.on:hover{background:var(--ink)}
+#chapters button i{font-style:normal;color:#cfcfcf;margin-right:6px}
+#chapters button.done i{color:var(--mute)}
+#chapters button.on i{color:var(--cyan)}
+
+/* ---------- 底栏 ---------- */
+#hud{
+  position:fixed;left:0;right:0;bottom:0;height:46px;z-index:30;
+  display:flex;align-items:center;justify-content:space-between;padding:0 26px;
+  background:linear-gradient(rgba(253,253,252,0),#fdfdfc 45%);
+}
+#hud .tip{font-size:12px;color:var(--ink2)}
+#hud .tip.warn{color:#c0392b}
+#hud .count{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--mute)}
+
+/* ---------- 光标提示 ---------- */
+.hint{
+  position:fixed;z-index:35;pointer-events:none;opacity:0;transition:opacity .15s;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  background:var(--ink);color:#fff;padding:4px 8px;border-radius:2px;transform:translate(14px,-50%);
+}
+.hint.on{opacity:1}
+
+/* ---------- 覆盖层的共同底子 ---------- */
+.bookzoom{
+  position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+  background:rgba(253,253,252,.72);backdrop-filter:blur(3px);
+  opacity:0;pointer-events:none;transition:opacity .3s;
+}
+.bookzoom.on{opacity:1;pointer-events:auto}
+.bookzoom{background:rgba(240,237,231,.92)}
+
+/* ---------- 展开层：粒子 + 底图 ----------
+   只铺到地面线为止 —— 相当于给小猫换了张背景，地面和小猫照常画在它上面。
+   高度 --xh 由 JS 按「地面在屏幕上的 Y」算出来；z-index 压在 #stage(10) 下面，
+   所以世界画布（小猫 / 地面线）盖在底图之上，底下那条白地照旧。 */
+#xBase,#xFx{position:fixed;left:0;top:0;width:100%;height:var(--xh,100%);display:none;z-index:5}
+#xFx{z-index:6}
+#xBase.on,#xFx.on{display:block}
+
+/* ---------- 展开后的文件夹桌面 ---------- */
+/* 浮在 #stage 上面（不挡小猫，小猫在地面线附近），压在顶栏/底栏下面 */
+.xdesk{
+  position:fixed;left:0;top:0;width:100%;height:var(--xh,100%);z-index:20;
+  opacity:0;pointer-events:none;transition:opacity .26s;
+  cursor:url(../assets/cursor.png) 2 2, auto;
+}
+.xdesk *{cursor:inherit}
+.xdesk.on{opacity:1;pointer-events:auto}
+
+/* 九个项目：像真桌面那样先从上往下排满一列，再换下一列 */
+.xfolders{
+  position:absolute;left:0;right:0;top:0;
+  padding:max(40px,6vh) 4vw 0;
+  display:grid;grid-template-rows:repeat(3,auto);grid-auto-flow:column;
+  grid-auto-columns:min(178px,23vw);gap:18px 10px;
+  justify-content:center;
+}
+.xfolders button{
+  appearance:none;border:1px solid transparent;background:none;
+  padding:8px 5px 7px;
+  display:flex;flex-direction:column;align-items:center;gap:7px;
+}
+.xfolders img{
+  width:clamp(52px,10vh,92px);height:clamp(52px,10vh,92px);
+  image-rendering:pixelated;display:block;
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.35));
+}
+.xfolders span{
+  font-size:clamp(12px,1.85vh,16px);line-height:1.3;color:#fff;text-align:center;
+  text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 3px rgba(0,0,0,.8);
+  padding:1px 3px;
+}
+.xfolders button:hover{border-color:rgba(255,255,255,.5);border-style:dotted}
+.xfolders button:hover span{background:#0507a0;box-shadow:0 0 0 2px #0507a0}
+
+/* 项目详情：还是那个蓝白弹窗。它是 body 的直接孩子，不在 .xdesk 里 ——
+   桌面要压在顶栏(30)下面，弹窗要盖在顶栏上面，共用一个层叠上下文就做不到。 */
+.xdetail{
+  position:fixed;left:0;top:0;width:100%;height:var(--xh,100%);z-index:55;
+  display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.3);
+  cursor:url(../assets/cursor.png) 2 2, auto;
+}
+.xdetail *{cursor:inherit}
+.xdetail.on{display:flex}
+.xwin{
+  width:min(760px,88%);max-height:88%;
+  background:#c9c9c9;padding:3px;
+  border:2px solid;border-color:#fff #6d6d6d #6d6d6d #fff;
+  box-shadow:3px 3px 0 rgba(0,0,0,.4);
+  display:flex;flex-direction:column;min-height:0;
+  animation:xwinpop .16s ease-out;
+}
+@keyframes xwinpop{from{transform:scale(.9);opacity:.4}to{transform:none;opacity:1}}
+.xwin-bar{
+  height:26px;flex:0 0 auto;background:linear-gradient(90deg,#0507a0,#2a2fbf);
+  display:flex;align-items:center;justify-content:space-between;padding:0 2px 0 8px;
+}
+.xwin-bar span{font-size:13px;font-weight:700;color:#fff;letter-spacing:.02em;white-space:nowrap;overflow:hidden}
+.xwin-btns{display:flex;gap:2px;font-style:normal}
+.xwin-btns b{
+  width:21px;height:19px;background:#c9c9c9;
+  border:1px solid;border-color:#fff #444 #444 #fff;
+  font:700 11px/17px var(--sans);color:#111;text-align:center;
+}
+.xwin-btns b:last-child:hover{background:#e04040;color:#fff}
+.xwin-body{
+  flex:1 1 auto;min-height:0;margin-top:3px;background:#fff;
+  border:1px solid;border-color:#6d6d6d #fff #fff #6d6d6d;
+  padding:22px 26px;overflow:auto;
+}
+.xwin-body::-webkit-scrollbar{width:12px;background:#dcdcdc}
+.xwin-body::-webkit-scrollbar-thumb{background:#c9c9c9;border:1px solid #6d6d6d}
+.xwin-body h3{margin:0 0 5px;font-size:17px;font-weight:700;color:#111}
+.xwin-body .xtitle-row{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.xwin-body .xtitle-row h3{min-width:0}
+.xwin-body .xdownload{
+  flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid #0507a0;background:#fff;color:#0507a0;text-decoration:none;
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;padding:6px 10px;
+}
+.xwin-body .xdownload:hover,.xwin-body .xdownload:focus-visible{background:#0507a0;color:#fff}
+.xwin-body .xmeta{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:#666;
+  padding-bottom:9px;margin-bottom:12px;border-bottom:1px solid #d5d5d5}
+.xwin-body p{margin:0 0 11px;font-size:14px;line-height:1.8;color:#1a1a1a}
+.xwin-body .xshot{margin:0 0 15px;text-align:center}
+.xwin-body .xshot img{display:block;margin:0 auto;max-width:100%;max-height:40vh;width:auto;height:auto;
+  border:1px solid #6d6d6d;background:#fff}
+.xwin-body .xshot figcaption{font-family:var(--mono);font-size:11px;color:#666;margin-top:7px;letter-spacing:.04em}
+.xwin-body .xkpi{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.xwin-body .xkpi span{font-family:var(--mono);font-size:11px;color:#0507a0;
+  border:1px solid #0507a0;padding:5px 9px}
+
+/* 和世界里 guideDir==='end' 那个前进箭头落在同一个位置：右边缘往里一点、竖直居中 */
+.xdesk-next{
+  position:fixed;right:70px;top:50%;z-index:2;
+  appearance:none;background:none;border:0;padding:0;cursor:pointer;
+  transform:translateY(-50%);
+}
+.xdesk-next .arrow{
+  width:52px;height:52px;border:1.6px solid var(--ink);border-radius:50%;
+  display:grid;place-items:center;background:#fff;
+  font-size:19px;line-height:1;color:var(--ink);
+  box-shadow:0 0 0 0 rgba(61,219,203,.55);
+  transition:background .2s,color .2s,transform .2s;
+  animation:ring 2s ease-out infinite;
+}
+.xdesk-next:hover .arrow{background:var(--ink);color:#fff;transform:scale(1.06)}
+.xdesk-next em{
+  position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:10px;
+  font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  color:#fff;white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.9);
+}
+
+.closebtn{
+  position:fixed;bottom:64px;left:50%;transform:translateX(-50%);
+  z-index:5;
+  border:1px solid var(--ink);background:#fff;color:var(--ink);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+  padding:9px 16px;border-radius:2px;cursor:pointer;transition:.18s;
+}
+.closebtn:hover{background:var(--ink);color:#fff}
+
+
+/* ---------- 引导箭头 ---------- */
+.guide{
+  position:fixed;z-index:38;appearance:none;background:none;border:0;padding:0;cursor:pointer;
+  opacity:0;pointer-events:none;transition:opacity .45s;
+  transform:translate(-50%,-50%);
+}
+.guide.on{opacity:1;pointer-events:auto}
+.guide .arrow{
+  width:52px;height:52px;border:1.6px solid var(--ink);border-radius:50%;
+  display:grid;place-items:center;background:#fff;
+  font-size:19px;line-height:1;color:var(--ink);
+  box-shadow:0 0 0 0 rgba(61,219,203,.55);
+  transition:background .2s,color .2s,transform .2s;
+}
+.guide:hover .arrow{background:var(--ink);color:#fff;transform:scale(1.06)}
+.guide.on .arrow{animation:ring 2s ease-out infinite}
+@keyframes ring{
+  0%{box-shadow:0 0 0 0 rgba(61,219,203,.6)}
+  70%{box-shadow:0 0 0 16px rgba(61,219,203,0)}
+  100%{box-shadow:0 0 0 0 rgba(61,219,203,0)}
+}
+.guide em{
+  position:absolute;left:50%;transform:translateX(-50%);
+  font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  color:var(--ink2);white-space:nowrap;
+}
+.guide.up em{left:100%;bottom:auto;top:50%;transform:translateY(-50%);margin-left:13px}
+.guide.right em{top:100%;margin-top:10px}
+
+.guide.up .arrow{animation:ring 2s ease-out infinite,floatY 1.9s ease-in-out infinite}
+@keyframes floatY{0%,100%{translate:0 0}50%{translate:0 -7px}}
+
+.guide.right .arrow{animation:ring 2s ease-out infinite,floatX 1.9s ease-in-out infinite}
+@keyframes floatX{0%,100%{translate:0 0}50%{translate:7px 0}}
+
+/* 「继续向前」：换幕的那一下不贴着小猫，钉在画面最右侧 ——
+   它不是「走两步」，是「这一段看完了，往下走」，位置上就该和世界里的热点分开。
+   坐标在 placeGuide() 里按视口算，这里只负责别被 .right 的浮动动画带偏。 */
+.guide.end .arrow{animation:ring 2s ease-out infinite}
+
+/* ---------- 小猫头上的气泡 ---------- */
+.bubble{
+  position:fixed;z-index:37;pointer-events:none;
+  opacity:0;transform:translate(-50%,-100%) translateY(6px);
+  transition:opacity .32s ease,transform .32s cubic-bezier(.2,.8,.2,1);
+}
+.bubble.on{opacity:1;transform:translate(-50%,-100%)}
+.bubble span{
+  display:block;position:relative;
+  max-width:280px;padding:10px 14px;
+  background:#fff;border:1.4px solid var(--ink);border-radius:12px;
+  font-size:13px;line-height:1.6;color:var(--ink);white-space:pre-wrap;
+  box-shadow:0 10px 24px -18px rgba(0,0,0,.7);
+}
+/* 尖角：两个三角叠出 1.4px 的描边效果（外层墨色，内层白，往上错 1.4px） */
+.bubble span::before,.bubble span::after{
+  content:"";position:absolute;top:100%;left:50%;translate:-50% 0;
+  border:8px solid transparent;border-bottom:0;
+}
+.bubble span::before{border-top-color:var(--ink)}
+.bubble span::after{border-top-color:#fff;translate:-50% -1.4px}
+
+/* ---------- loading ---------- */
+.loading{
+  position:fixed;inset:0;z-index:70;display:grid;place-items:center;
+  background:#fdfdfc;opacity:0;pointer-events:none;transition:opacity .38s;
+}
+.loading.on{opacity:1;pointer-events:auto}
+.lbox{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:min(320px,80vw);gap:24px;text-align:center;
+}
+.lbox .ldots{display:flex;align-items:center;justify-content:center;gap:20px;width:100%}
+.lbox .ld{
+  width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:var(--ink);display:block;
+  animation:blip 1.05s ease-in-out infinite;
+}
+.lbox .ld:nth-child(2){animation-delay:.16s}
+.lbox .ld:nth-child(3){animation-delay:.32s}
+.lbox p{width:100%;margin:0;font-family:var(--mono);font-size:10.5px;line-height:1.6;letter-spacing:.2em;color:var(--mute)}
+@keyframes blip{0%,100%{opacity:.18;transform:translateY(0)}50%{opacity:1;transform:translateY(-6px)}}
